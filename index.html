@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>featmask Decoder</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+    }
+
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    /* LEFT */
+    .main {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+    }
+
+    .input-box {
+      margin-bottom: 16px;
+    }
+
+    .input-box input {
+      width: 280px;
+      padding: 8px;
+      font-size: 16px;
+    }
+
+    .mask-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .mask-item {
+      background: #fff;
+      border-radius: 6px;
+      padding: 10px 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      border-left: 5px solid transparent;
+    }
+
+    .mask-item.active {
+      border-left-color: #1890ff;
+      background: #e6f4ff;
+    }
+
+    .mask-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 4px;
+    }
+
+    .mask-value {
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    /* RIGHT HELP */
+    .help {
+      width: 640px;
+      border-left: 1px solid #ddd;
+      background: #fff;
+      padding: 16px;
+      overflow-y: auto;
+    }
+
+    .help h3 {
+      margin-top: 0;
+      font-size: 22px;
+    }
+
+    .help h4 {
+      margin-bottom: 5px;
+      color: #333333;
+    }
+
+    .help-placeholder {
+      color: #888;
+      font-size: 14px;
+    }
+    
+    .help-placeholder div {
+      border-bottom: 1px solid #888;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- LEFT -->
+  <div class="main">
+    <h2>Feature Mask Decoder</h2>
+
+    <div class="input-box">
+      <input
+        id="hexInput"
+        type="text"
+        placeholder="예: 0x00820020 2000800 0"
+        autocomplete="off"
+        autofocus="on"
+      />
+    </div>
+
+    <div id="parsed" class="parsed"></div>
+    <div id="baseSection" class="mask-list"></div>
+    <div id="ext1Section" class="mask-list"></div>
+    <div id="ext2Section" class="mask-list"></div>
+  </div>
+
+  <!-- RIGHT HELP -->
+  <div class="help">
+    <h3>Mask Definitions</h3>
+    <h4>Base</h4>
+    <div id="helpContent" class="help-placeholder"></div>
+    <h4>Ext1</h4>
+    <div id="helpContentExt1" class="help-placeholder"></div>
+    <h4>Ext2</h4>
+    <div id="helpContentExt2" class="help-placeholder"></div>
+  </div>
+
+</div>
+
+<script>
+  const MASKS = [
+    {
+      mask: 0x00000001,
+      desc: "CSD처럼 단말번호 대신 CarID를 사용하는 경우",
+      value: "FEATURE_MASK_USED_CARID",
+    },
+    {
+      mask: 0x00000002,
+      desc: "트렁크 열림 상태 확인 여부 (Default:1)",
+      value: "FEATURE_MASK_USED_TRUNK_ST<br>0:확인, 1:확인하지 않음",
+    },
+    {
+      mask: 0x00000004,
+      desc: "SMS 명령 처리시 응답 값에 SMS index 정보를 포함할지 여부. CSD의 경우 해당 (Default:0)",
+      value: "FEATURE_MASK_UNUSED_SMSIDX<br>0:포함, 1:포함하지 않음",
+    },
+    {
+      mask: 0x00000008,
+      desc: "RF Card detect 시 예약 시간 체크할때 예약 완료 시간도 체크하도록함. 완료 시간이 현재 시간보다 큰 경우 동작하지 않도록 함 (Default:0)",
+      value: "FEATURE_MASK_RSV_CHECK_ENDTIME<br>0:사용 가능, 1:사용 불가능",
+    },
+    {
+      mask: 0x00000010,
+      desc: "Door Control시 Smart  Key와 직접 제어 Command를 모두 전달함",
+      value: "FEATURE_MASK_DOORCTRL_BOTHWAY",
+    },
+    {
+      mask: 0x00000020,
+      desc: "차량 예약시간 이전에 차량 제어 가능하도록 하는 기능. 활성화 제어를 하는 경우 추가로 시간 설정 제어가 필요함 (Default:1)",
+      value: "FEATURE_MASK_ALLOWED_PRE_OPER<br>0:활성화, 1:비활성화",
+    },
+    {
+      mask: 0x00000040,
+      desc: "FEATURE_USE_MODEM_TCPWB를 사용하더라도 OAP는 TCPWRITE를 사용하도록 함 (Default:1)",
+      value: "FEATURE_MASK_ALLOWED_OAP_TCPWRITE<br>0:활성화, 1:비활성화",
+    },
+    {
+      mask: 0x00000080,
+      desc: "CSD의 경우 예약 변경/취소시 예약 시간도 확인해야 함",
+      value: "FEATURE_MASK_ALLOWED_CHECK_RSV_TIME",
+    },
+    {
+      mask: 0x00000100,
+      desc: "SMSIDX 대신에 수신된 command의 Type을 전달함",
+      value: "FEATURE_MASK_CMDTYPE_RETURN_ON_SMSIDX",
+    },
+    {
+      mask: 0x00000200,
+      desc: "NFC 혹은 RFID 번호 인식시 Format (Default:1)",
+      value: "FEATURE_MASK_RFID_BIG_ENDIAN_FORMAT<br>0:Little Endian, 1:Big Endian",
+    },
+    {
+      mask: 0x00000400,
+      desc: "CSD의 2차 요구 사항에서 일부 command의 경우 Response를 늘림",
+      value: "FEATURE_MASK_CMD_RSP_EXTENDED_RPT",
+    },
+    {
+      mask: 0x00000800,
+      desc: "CSD의 2차 요구 사항에서 등록되어 있지 않거나 예약 시간 오류의 경우 보고하지 않음",
+      value: "FEATURE_MASK_DISALLOWED_UNREG_RFID",
+    },
+    {
+      mask: 0x00001000,
+      desc: "CSD의 2차 요구 사항에서 반납 시간이 가까워진 경우 혹은 반납 시간이 지났음에도 불구하고 반납이 안된 경우 Server에 Alert",
+      value: "FEATURE_MASK_ALLOWED_RETURN_ALERT",
+    },
+    {
+      mask: 0x00002000,
+      desc: "TRIP 정보중 26~29번 정보(사용 주유량 및 운전 거리)를 전달할지의 여부 (Default:1)",
+      value: "FEATURE_MASK_EXTENDED_UPLOAD_TRIP_INFO<br>0:전달하지 않음, 1:전달함",
+    },
+    {
+      mask: 0x00004000,
+      desc: "CSF의 2차 요구 사항에서 RFID Tagging시 예약자 혹은 관리자의 카드가 아닌 경우 Door를 lock 시키는 기능",
+      value: "FEATURE_MASK_DOOR_LOCK_FAIL_RECOGNITION",
+    },
+    {
+      mask: 0x00008000,
+      desc: "CSC의 경우 start_reservation_time만 유효하고 RFID가 같으면 제어권을 줌 <BR>"
+        +"(NOTE 1) 이 feature가 enable 되면 FEATURE_MASK_RSV_CHECK_ENDTIME과 FEATURE_MASK_ALLOWED_PRE_OPER feature는 의미 없어 지게 됨 <BR>"
+        +"(NOTE 2) RFID_TIMEOUT이 의미가 없는 값이 됨으로 서버에 report시에는 RFID_NONE_REG(0) / RFID_REGISTERED(1)만 함",
+      value: "FEATURE_MASK_RSV_CHECK_SIMPLE",
+    },
+    {
+      mask: 0x00010000,
+      desc: "CSD의 2차 요구 사항에서 T301의 갯수를 최소화하는 기능",
+      value: "FEATURE_MASK_MINIMIZE_REPORT_T301",
+    },
+    {
+      mask: 0x00020000,
+      desc: "SMS 명령 수신시 CRC를 확인할지의 여부 (Default:1)",
+      value: "FEATURE_MASK_SMS_COMMAND_ENABLED_CRC_CHECK<br>0:확인 안 함, 1: 확인",
+    },
+    {
+      mask: 0x00040000,
+      desc: "Door의 Lock/Unlock 상태가 변경되면 Report함 (Default:1)",
+      value: "FEATURE_MASK_ALLOWED_REPORT_DOORLOCK_ST<br>0:보고 하지 않음, 1:보고 함",
+    },
+    {
+      mask: 0x00080000,
+      desc: "일정 시간 동안 Door가 Unlock되어 있다면 자동으로 Lock 시킴. 이때 Door를 Open하거나 Close하면 해당 시간을 초기화 함",
+      value: "FEATURE_MASK_ALLOWED_AUTO_DOORLOCK",
+    },
+    {
+      mask: 0x00100000,
+      desc: "FMS 지원을 위한 TRIP 실시간 정보(T15)를 일정 시간 동안 수집한 후 주기 보고 전송시 같이 보낼 지의 여부",
+      value: "FEATURE_MASK_FMS_DATA_UPLOAD",
+    },
+    {
+      mask: 0x00200000,
+      desc: "Data를 GET/PUT/POST를 이용한 HTTP 형태가 아닌 실제 Data만을 보냄",
+      value: "FEATURE_MASK_FORMAT_TCP_UPLOAD",
+    },
+    {
+      mask: 0x00400000,
+      desc: "Door Open/Close 시/RFID 태깅시 경적음 없이 동작하도록 하기 위함",
+      value: "FEATURE_MASK_SILENT_DOOR_CTRL",
+    },
+    {
+      mask: 0x00800000,
+      desc: "전송한 데이터에 대해 서버에서 Response를 수신하는 경우에만 정상전송되었다고 판단. HTTP11이 Define되면 사용 안함",
+      value: "FEATURE_MASK_CHECK_SOCKET_RSP",
+    },
+    {
+      mask: 0x01000000,
+      desc: "Tail Lamp가 차종에 따라 Chattering이 발생하는 경우가 있어 이를 방지하는 Code(필요시 개별 차량에 따라 Define하도록 함)",
+      value: "FEATURE_MASK_TAILLAMP_BLOCK_CHATTERING",
+    },
+    {
+      mask: 0x02000000,
+      desc: "현재 Activated된 예약 정보 이전의 예약을 자동 삭제하지 않도록 함 (Default:지난 예약은 삭제하는 것)",
+      value: "FEATURE_MASK_DISALLOW_DELETE_EXPIRED_RESERVATION",
+    },
+    {
+      mask: 0x04000000,
+      desc: "대여자가 반납하기 이전에 다른 예약자가 태깅하는 경우 기존의 사용자가 계속 사용하도록 뒤 예약자에게는 제어권 주지 않음",
+      value: "FEATURE_MASK_DISALLOW_AUTOSTART_NEW_SUBSCRIBER",
+    },
+    {
+      mask: 0x08000000,
+      desc: "K3 법인형의 경우 Air bag 상태 Check 값이 필요함",
+      value: "FEATURE_MASK_ALLOW_AIRBAG_ST_CHECK",
+    },
+    {
+      mask: 0x10000000,
+      desc: "Trunk Control시 Smart Key와 직접 제어 command를 모두 전달함. 기존 Feature : FEATURE_TRUNK_CONTROL_USE_ALL",
+      value: "FEATURE_MASK_TRUNKCTRL_BOTHWAY",
+    },
+    {
+      mask: 0x20000000,
+      desc: "RF Card Tagging시 Card Number가 읽혀진 카드의 경우 UID 및 CARD ID 모두 전달할지 여부",
+      value: "FEATURE_MASK_RFID_REPORT_UID_AND_NUMBER",
+    },
+    {
+      mask: 0x40000000,
+      desc: "선불 카드(T-Money)의 환승 정보를 포함하여 보고 할지 여부",
+      value: "FEATURE_MASK_RFID_REPORT_TRANSFER_INFORM",
+    },
+    {
+      mask: 0x80000000,
+      desc: "엔진이 켜져 있거나 ACC가 ON 상태인 경우 운전석 차량 문이 열려 있는 경우 10초간 경고음 울리는 기능을 활성화 시킬지의 여부",
+      value: "FEATURE_MASK_DISALLOW_KEYPOSITION_ALARM",
+    },
+  ];
+
+const Ext1MASKS = [
+  {
+    mask: 0x00000001,
+    desc: "GPS 사용 여부, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_GPS",
+  },
+  {
+    mask: 0x00000002,
+    desc: "RFID 사용 여부, 사용하지 않도록 설정하면 RFID 인식이 안되어도 경고음 발생하지 않음, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_RFID",
+  },
+  {
+    mask: 0x00000004,
+    desc: "CARIO 사용 여부, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_CARIO",
+  },
+  {
+    mask: 0x00000008,
+    desc: "OBD 사용 여부, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_OBD",
+  },
+  {
+    mask: 0x00000010,
+    desc: "RSV1 사용 여부, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_RSV1",
+  },
+  {
+    mask: 0x00000020,
+    desc: "RSV2 사용 여부, 6개의 bit로 주변 인터페이스 사용 여부를 결정함. KT 렌탈 법인형 혹은 FMS 용으로 사용",
+    value: "FEATURE_EXT1_MASK_BLOCK_EXTERNAL_IF_RSV2",
+  },
+  {
+    mask: 0x00000100,
+    desc: "FEATURE_ENCRYPTION_DES이 define 되어 있는 경우 encryption을 할지의 여부",
+    value: "FEATURE_EXT1_MASK_USED_ENCRYPTION_DES",
+  },
+  {
+    mask: 0x00000200,
+    desc: "AVLPOS 전송시 모뎀의 무선 환경 상태 데이터(T10)를 전달할지 여부",
+    value: "FEATURE_EXT1_MASK_REPORT_MODEM_ENV_PARAM",
+  },
+  {
+    mask: 0x00000400,
+    desc: "직접제어만 가능한 차량 중 차량의 문이 열려져 있는 경우 도어 Lock 시도시 Lock이 안되고 다시 Unlock 하도록 하는 기능 활성화 여부",
+    value: "FEATURE_EXT1_MASK_BLOCK_IPS_SLEEP",
+  },
+  {
+    mask: 0x00000800,
+    desc: "제어 명령이 Force Mode인 경우라도 운행중인 경우에는 제어하지 않는 기능 활성화 여부",
+    value: "FEATURE_EXT1_MASK_CHK_DRIVING_IN_FORCEMODE",
+  },
+  {
+    mask: 0x00001000,
+    desc: "제어 명령의 CRC 항목에 Seq Number를 포함하여 Seq Check 하도록 함",
+    value: "FEATURE_EXT1_MASK_ENABLED_CHECK_CMD_SEQNO",
+  },
+  {
+    mask: 0x00002000,
+    desc: "예약 건에 대한 대여 활성화시 이전 예약건을 삭제하는데 이때 동일한 시간대의 예약도 삭제하는게 기본인데 CSA처럼 동일 시간은 삭제하지 않도록 함",
+    value: "FEATURE_EXT1_MASK_DISABLE_DELRSV_SAME_STIME",
+  },
+  {
+    mask: 0x00004000,
+    desc: "TCP Link Forever",
+    value: "FEATURE_EXT1_MASK_WCDMA_TCP_LINK_FOREVER",
+  },
+  {
+    mask: 0x00008000,
+    desc: "PPP Link Forever",
+    value: "FEATURE_EXT1_MASK_WCDMA_PPP_LINK_FOREVER",
+  },
+  {
+    mask: 0x00010000,
+    desc: "알람 (T9) 서비스 정보에 추가 정보 표시 기능 활성화 여부",
+    value: "FEATURE_EXT1_MASK_VOS_ALM_EXTENDED_INFO",
+  },
+  {
+    mask: 0x00020000,
+    desc: "Diagnostic Report Function",
+    value: "FEATURE_EXT1_MASK_DIAGRPT",
+  },
+  {
+    mask: 0x00040000,
+    desc: "Split door lock/unlock control into direct and smartkey",
+    value: "FEATURE_EXT1_MASK_SPLIT_DOORLOCK_CTRL",
+  },
+  {
+    mask: 0x00080000,
+    desc: "TCS Watchdog function",
+    value: "FEATURE_EXT1_MASK_TCS_WATCHDOG_ENABLE",
+  },
+  {
+    mask: 0x00100000,
+    desc: "예약 인덱스 대소문자 구별해서 저장하는 기능 활성화 여부 (valid only CSF target)",
+    value: "FEATURE_EXT1_MASK_RSVIDX_NOCONV_ENABLE",
+  },
+  {
+    mask: 0x00200000,
+    desc: "Hand-on driver special modifications",
+    value: "FEATURE_EXT1_MASK_HANDSON_MOD",
+  },
+  {
+    mask: 0x00400000,
+    desc: "Enable EverOn operations",
+    value: "FEATURE_EXT1_MASK_EVERON_MOD",
+  },
+  {
+    mask: 0x00800000,
+    desc: "도어 Unlock 제어 후 30초간 도어 Open 하지 않는 경우 자동 도어 Lock 기능 활성화 여부",
+    value: "FEATURE_EXT1_MASK_DISALLOW_AUTOLOCK",
+  },
+  {
+    mask: 0x01000000,
+    desc: "고정밀 GPS 주기보고 등 GPS와 연관된 데이터를 xxx.123456789.xxx.123456789처럼 전달",
+    value: "FEATURE_EXT1_MASK_HIGH_PRECISION_GPS",
+  },
+  {
+    mask: 0x02000000,
+    desc: "제어 명령이 Force Mode인 경우라도 제어명령의 timeout 시간 반영 여부",
+    value: "FEATURE_EXT1_MASK_CHK_TIMEOVER_IN_FORCEMODE",
+  },
+  {
+    mask: 0x04000000,
+    desc: "Socket open fail시 바로 다음 서버 접속 시도",
+    value: "FEATURE_EXT1_MASK_FAST_SCAN_SERVER",
+  },
+  {
+    mask: 0x08000000,
+    desc: "특정 수집된 CAN(or OBD) Data를 시동상태에서 주기적으로 서버로 전송하도록 하는 기능",
+    value: "FEATURE_EXT1_MASK_CANDATA_BYPASS_REPORT",
+  },
+  {
+    mask: 0x10000000,
+    desc: "제어 명령의 주체가 ADMIN인 경우라도 제어 명령의 timeout 시간은 반영함",
+    value: "FEATURE_EXT1_MASK_CHK_TIMEOVER_BY_ADMIN",
+  },
+  {
+    mask: 0x20000000,
+    desc: "FEATURE_CTRL_VALIDATE_CHECK_RSVINDEX이 define되어 있지 않은 경우 제어 명령 시 예약 index도 같이 확인함",
+    value: "FEATURE_EXT1_MASK_CHK_RSVINDEX_WHEN_CTRL",
+  },
+  {
+    mask: 0x40000000,
+    desc: "주기 보고 전송시 Extended Parameter를 같이 전송하도록 함",
+    value: "FEATURE_EXT1_MASK_EXTENDED_PARAM_REPORT",
+  },
+  {
+    mask: 0x80000000,
+    desc: "FMS 지원을 위한 TRIP 실시간 정보(T15)를 수집 주기 간격으로 보낼지의 여부",
+    value: "FEATURE_EXT1_MASK_CHK_RSVINDEX_WHEN_CTRL",
+  },
+];
+
+const Ext2MASKS = [
+  {
+    mask: 0x00000001,
+    desc: "Modem debug message switch",
+    value: "FEATURE_EXT2_MASK_MODEM_DEBUG_ENABLE"
+  },
+  {
+    mask: 0x00000002,
+    desc: "AM Telecom modem sleep control test code (valid if FEATURE_AMTEL_TESTCODE)",
+    value: "FEATURE_EXT2_MASK_AMTEL_TEST_SLEEPCFG"
+  },
+  {
+    mask: 0x00000004,
+    desc: "FEATURE_EXT2_MASK_TCP_RECONN_ENABLE",
+    value: "FEATURE_EXT2_MASK_TCP_RECONN_ENABLE"
+  },
+  {
+    mask: 0x00000008,
+    desc: "FEATURE_EXT2_MASK_EVERON_DEBUG_ENABLE",
+    value: "FEATURE_EXT2_MASK_EVERON_DEBUG_ENABLE"
+  },
+  {
+    mask: 0x00000010,
+    desc: "Disable Modem Reset/Reboot Operation",
+    value: "FEATURE_EXT2_MASK_MODEM_RESET_DISABLE"
+  },
+  {
+    mask: 0x00000020,
+    desc: "시동 On시 Trip 데이터(T4)를 전송할지 여부",
+    value: "FEATURE_EXT2_MASK_TRIP_START_REPORT"
+  },
+  {
+    mask: 0x00010000,
+    desc: "AlwaysOn Power-Saving Function",
+    value: "FEATURE_EXT2_MASK_ALWAYSON_POWERSAVE_ENABLE"
+  },
+  {
+    mask: 0x00020000,
+    desc: "Power Hold Off Function",
+    value: "FEATURE_EXT2_MASK_POWERHOLD_OFF_ENABLE"
+  },
+  {
+    mask: 0x00040000,
+    desc: "Device reset when continuous socket error",
+    value: "FEATURE_EXT2_MASK_DEVRST_CONTSOCKERR_ENABLE"
+  },
+  {
+    mask: 0x00080000,
+    desc: "AlwaysOn Sleep Function",
+    value: "FEATURE_EXT2_MASK_ALWAYSON_SLEEP_ENABLE"
+  },
+  {
+    mask: 0x00100000,
+    desc: "Enable Otoplug packet to AWS IoT [Experimental]",
+    value: "FEATURE_EXT2_MASK_AWS_BYPASS_ENABLE"
+  },
+  {
+    mask: 0x00200000,
+    desc: "Enable AWS IoT [Experimental]",
+    value: "FEATURE_EXT2_MASK_AWS_IOT_ENABLE"
+  },
+  {
+    mask: 0x00400000,
+    desc: "Test VMS ClientID [Experimental]",
+    value: "FEATURE_EXT2_MASK_VMS_TEST_CLIENTID"
+  },
+];
+
+/* ======= Help ======= */
+const helpContent = document.getElementById("helpContent");
+const helpContent1 = document.getElementById("helpContentExt1");
+const helpContent2 = document.getElementById("helpContentExt2");
+
+function renderHelp() {
+  helpContent.innerHTML = "";
+  
+  MASKS.forEach(item => {
+    const div = document.createElement("div");
+    div.style.paddingBottom = "8px";
+    div.innerHTML = `
+      <strong>0x${item.mask.toString(16).padStart(8, "0")}</strong><br>
+      <span style="font-size:13px;color:#555;">${item.desc}</span>`;
+      helpContent.appendChild(div);
+  });
+
+  Ext1MASKS.forEach(item => {
+    const div1 = document.createElement("div");
+    div1.style.paddingBottom = "8px";
+    div1.innerHTML = `
+      <strong>0x${item.mask.toString(16).padStart(8, "0")}</strong><br>
+      <span style="font-size:13px;color:#555;">${item.desc}</span>`;
+      helpContent1.appendChild(div1);
+  });
+
+  Ext2MASKS.forEach(item => {
+    const div2 = document.createElement("div");
+    div2.style.paddingBottom = "8px";
+    div2.innerHTML = `
+      <strong>0x${item.mask.toString(16).padStart(8, "0")}</strong><br>
+      <span style="font-size:13px;color:#555;">${item.desc}</span>`;
+      helpContent2.appendChild(div2);
+  });
+}
+    
+
+/* ======= Input ======= */
+  const input = document.getElementById("hexInput");
+  const baseSection = document.getElementById("baseSection");
+  const ext1Section = document.getElementById("ext1Section");
+  const ext2Section = document.getElementById("ext2Section");
+  const parsed = document.getElementById("parsed");
+
+  function normalizeParts(parts) {
+    const result = [...parts];
+    while (result.length < 3) result.push("0");
+    return result.slice(0, 3);
+  }
+
+  function parseHex(str) {
+    if (!str) return 0;
+    str = str.trim();
+    if (!str.startsWith("0x")) str = "0x" + str;
+    const v = Number(str);
+    return isNaN(v) ? 0 : v;
+  }
+
+  function parseMultiInput(input) {
+    const raw = input.trim() ? input.trim().split(" ") : [];
+    const parts = normalizeParts(raw);
+
+    return {
+      base: parseHex(parts[0]),
+      ext1: parseHex(parts[1]),
+      ext2: parseHex(parts[2]),
+    };
+  }
+
+  function renderSection(el, title, value, maskDefs) {
+    el.innerHTML = `<h3>${title}</h3>`;
+
+    if (value === 0) {
+      el.innerHTML += `<div class="empty">활성화된 마스크 없음</div>`;
+      return;
+    }
+
+    const active = maskDefs.filter(item => (value & item.mask) !== 0);
+
+    if (active.length === 0) {
+      el.innerHTML += `<div class="empty">활성화된 마스크 없음</div>`;
+      return;
+    }
+
+    const list = document.createElement("div");
+    list.className = "mask-list";
+
+    active.forEach(item => {
+      const div = document.createElement("div");
+      div.className = "mask-item active";
+      div.innerHTML = `
+        <div class="mask-header">
+          <span>0x${item.mask.toString(16).padStart(8, "0")}</span>
+          <span>bit ${Math.log2(item.mask)}</span>
+        </div>
+        <div>${item.desc}</div>
+        <strong>${item.value}</strong>
+      `;
+      list.appendChild(div);
+    });
+
+    el.appendChild(list);
+  }
+
+  function update() {
+    const { base, ext1, ext2 } = parseMultiInput(input.value);
+
+    parsed.textContent =
+      `BASE : 0x${base.toString(16).padStart(8, "0")}   ` +
+      `EXT1 : 0x${ext1.toString(16).padStart(8, "0")}   ` +
+      `EXT2 : 0x${ext2.toString(16).padStart(8, "0")}`;
+
+    renderSection(baseSection, "BASE", base, MASKS);
+    renderSection(ext1Section, "EXT1", ext1, Ext1MASKS);
+    renderSection(ext2Section, "EXT2", ext2, Ext2MASKS);
+  }
+
+  input.addEventListener("input", update);
+  renderHelp();
+</script>
+
+</body>
+</html>
